@@ -130,6 +130,7 @@ IOUSBController::init(OSDictionary * propTable)
 bool 
 IOUSBController::start( IOService * provider )
 {
+    int		i;
     IOReturn	err = kIOReturnSuccess;
     
     if( !super::start(provider))
@@ -189,10 +190,13 @@ IOUSBController::start( IOService * provider )
             break;
         }
 
-	// allocate 50 (kSizeOfCommandPool) commands of each type
+        for (i = 1; i < kUSBMaxDevices; i++)
+        {
+            _addressPending[i] = false;
+        }
+
+        // allocate 50 (kSizeOfCommandPool) commands of each type
         //
-	int	i;
-        
 	for (i=0; i < kSizeOfCommandPool; i++)
 	{
 	    IOUSBCommand *command = IOUSBCommand::NewCommand();
@@ -282,24 +286,40 @@ IOUSBController::CreateDevice(	IOUSBDevice 		*newDevice,
     USBLog(5,"%s: CreateDevice: addr=%d, speed=%s, power=%d", getName(), 
              deviceAddress, (speed == kUSBDeviceSpeedLow) ? "low" :  ((speed == kUSBDeviceSpeedFull) ? "full" : "high"), (int)powerAvailable*2);
     
+    _addressPending[deviceAddress] = true;			// in case the INIT takes a long time
+    
     do 
     {
         if (!newDevice->init(deviceAddress, powerAvailable, speed, maxPacketSize))
+        {
+            USBLog(3,"%s[%p]::CreateDevice device->init failed", getName(), this);
             break;
+        }
         
         if (!newDevice->attach(this))
+        {
+            USBLog(3,"%s[%p]::CreateDevice device->attach failed", getName(), this);
             break;
+        }
         
         if (!newDevice->start(this))
         {
+            USBLog(3,"%s[%p]::CreateDevice device->start failed", getName(), this);
             newDevice->detach(this);
             newDevice->release();
             break;
         }
-        
+
+        _addressPending[deviceAddress] = false;
+
         return(kIOReturnSuccess);
 
     } while (false);
+
+    // What do we do with the pending address here?  We should clear it and then
+    // make sure that the caller to CreateDevice disables the port
+    //
+    _addressPending[deviceAddress] = false;
 
     return(kIOReturnNoMemory);
 }
@@ -353,13 +373,27 @@ IOUSBController::GetNewAddress(void)
         clients->release();
     }
 
+    // Add check to see if an address is pending attachment to the IOService
+    //
+    for (i = 1; i < kUSBMaxDevices; i++)
+    {
+        if ( _addressPending[i] == true )
+        {
+            USBLog(3,"%s[%p]::GetNewAddress: Address %d is pending",getName(), this, i);
+            assigned[i] = true;
+        }
+    }
+    
     for (i = 1; i < kUSBMaxDevices; i++)
     {
 	if (!assigned[i])
+        {
             return i;
+        }
     }
 
-    return(0);	// No free device addresses!
+    USBLog(2, "%s[%p]::GetnewAddress - ran out of new addresses!", getName(), this);
+    return (0);	// No free device addresses!
 }
 
 
@@ -1189,6 +1223,7 @@ IOUSBController::MakeDevice(USBDeviceAddress *	address)
     *address = GetNewAddress();
     if(*address == NULL) 
     {
+        USBError(1, "%s[%p]::MakeDevice error getting address - releasing newDev", getName(), this);
 	newDev->release();
 	return NULL;
     }
@@ -1197,9 +1232,10 @@ IOUSBController::MakeDevice(USBDeviceAddress *	address)
     
     if (err)
     {
-        USBLog(3,"%s[%p]::MakeDevice error setting address. err=0x%x device=%p", getName(), this, err, newDev);
+        USBError(1, "%s[%p]::MakeDevice error setting address. err=0x%x device=%p - releasing device", getName(), this, err, newDev);
         *address = 0;
-        //return(0); Some devices produce a spurious error here, eg. Altec Lansing speakers
+	newDev->release();
+	return NULL;
     }
 	
     return(newDev);

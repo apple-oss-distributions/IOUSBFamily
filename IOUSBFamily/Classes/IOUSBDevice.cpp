@@ -208,7 +208,10 @@ IOUSBDevice::init(USBDeviceAddress deviceAddress, UInt32 powerAvailable, UInt8 s
 {
 
     if(!super::init())
+    {
+        USBLog(3,"[%p]::init super->init failed", this);
 	return false;
+    }
 
     // allocate our expansion data
     if (!_expansionData)
@@ -226,7 +229,7 @@ IOUSBDevice::init(USBDeviceAddress deviceAddress, UInt32 powerAvailable, UInt8 s
         USBError(1, "%s[%p]::init - Error allocating getConfigLock", getName(), this);
         return false;
     }
-    
+
     _address = deviceAddress;
     _descriptor.bMaxPacketSize0 = maxPacketSize;
     _busPowerAvailable = powerAvailable;
@@ -280,7 +283,6 @@ IOUSBDevice::finalize(IOOptionBits options)
 void 
 IOUSBDevice::free()
 {
-    USBLog(5,"%s[%p]::free",getName(), this);
     if(_configList) 
     {
 	int 	i;
@@ -295,13 +297,16 @@ IOUSBDevice::free()
     }
     _currentConfigValue = 0;
 
-    IORecursiveLockFree(_getConfigLock);
-    
     //  This needs to be the LAST thing we do, as it disposes of our "fake" member
     //  variables.
     //
     if (_expansionData)
+    {
+        if ( _getConfigLock )
+            IORecursiveLockFree(_getConfigLock);
+    
 	IOFree(_expansionData, sizeof(ExpansionData));
+    }
 
     super::free();
 }
